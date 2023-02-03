@@ -232,13 +232,13 @@ def main():
             topicsToMoveJson, topicPartitionsBeingMoved, topicsLeft, bytesLeft = createTopicsToMoveJsonFile(maxNegDrive.topicsToMove,maxPosDrive,maxNumPartitions)
             maxPosDrive.bytesNeeded = bytesLeft
             maxNegDrive.topicsToMove = topicsLeft
-            ssh.simpleExecute(f"echo '{topicsToMoveJson}' > {maxNegDrive.path}/data/topicsToMove.json")
+            ssh.simpleExecute(f"echo '{topicsToMoveJson}' > /home/apps/s-cpadmin/Util/ReassignPartitions/topicsToMove.json")
             print(f'Disc moving data: {maxNegDrive}\n to: {maxPosDrive}\n')
-            command = f'kafka-reassign-partitions --zookeeper g-vmx-2{env}-hubapp-confluent-zk-001.dev.azeus.gaptech.com:2181 --topics-to-move-json-file {maxNegDrive.path}/data/topicsToMove.json --broker-list 1,2,3 --generate'
+            command = f'kafka-reassign-partitions --zookeeper g-vmx-2{env}-hubapp-confluent-zk-001.dev.azeus.gaptech.com:2181 --topics-to-move-json-file /home/apps/s-cpadmin/Util/ReassignPartitions/topicsToMove.json --broker-list 1,2,3 --generate'
             print(command+'\n')
             stdout = ssh.simpleExecute(command)
             reassignmentConfigurationJson, numOfPartitionsBeingMoved = modifyReassignmentConfigurationJson(json.loads(stdout[5]),topicPartitionsBeingMoved,maxPosDrive.path+'/data',brokerID)
-            reassignmentConfigurationFilePath = f'{maxNegDrive.path}/data/reassignmentConfiguration.json'
+            reassignmentConfigurationFilePath = f'/home/apps/s-cpadmin/Util/ReassignPartitions/reassignmentConfiguration.json'
             ssh.simpleExecute(f"echo '{reassignmentConfigurationJson}' > {reassignmentConfigurationFilePath}")
             print(f'Reassignment Configuration JSON: \n {reassignmentConfigurationJson}')
             commandTemplate = f'kafka-reassign-partitions --zookeeper g-vmx-2{env}-hubapp-confluent-zk-001.dev.azeus.gaptech.com:2181,g-vmx-2{env}-hubapp-confluent-zk-002.dev.azeus.gaptech.com:2181,g-vmx-2{env}-hubapp-confluent-zk-003.dev.azeus.gaptech.com:2181 --command-config /home/apps/s-cpadmin/Util/Kafka_SSL.cfg --reassignment-json-file {reassignmentConfigurationFilePath} --bootstrap-server g-vmx-2{env}-hubapp-confluent-kb-001.dev.azeus.gaptech.com:9093,g-vmx-2{env}-hubapp-confluent-kb-002.dev.azeus.gaptech.com:9093,g-vmx-2{env}-hubapp-confluent-kb-003.dev.azeus.gaptech.com:9093 '
@@ -251,8 +251,11 @@ def main():
             while True:
                 stdout = ssh.simpleExecute(commandTemplate+'--verify')
                 partitions = [x for x in stdout if x.count('Reassignment of partition') > 0]
-                statusOfPartitions=[1 if x.count('completed successfully')==1 else -1 if x.count('failed')==1 else 2 if x.count('in progress')==1 else 0 for x in partitions]
+                replicas = [x for x in stdout if x.count('Reassignment of replica') > 0]
+                statusOfPartitions=[1 if x.count('is complete')==1 else -1 if x.count('failed')==1 else 2 if x.count('in progress')==1 else 0 for x in partitions]
+                statusOfReplicas=[1 if x.count('completed successfully')==1 else -1 if x.count('failed')==1 else 2 if x.count('in progress')==1 else 0 for x in replicas]
                 successCount, failCount, inProgressCount = 0,0,0
+                replicaSuccessCount, replicaFailCount, replicaInProgressCount = 0,0,0
                 for status in statusOfPartitions:
                     if status == 1:
                         successCount+=1
@@ -260,13 +263,22 @@ def main():
                         failCount+=1
                     elif status == 2:
                         inProgressCount+=1
+
+                for status in statusOfReplicas:
+                    if status == 1:
+                        replicaSuccessCount+=1
+                    elif status == -1:
+                        replicaFailCount+=1
+                    elif status == 2:
+                        replicaInProgressCount+=1
                 print(UP)
                 print('Reassigning Partitions'+('.'*y)+CLR)
                 [print(x) for x in partitions]
+                [print(x) for x in replicas]
                 y+=1 #for the loading dots
                 if y == 4:
                     y = 0
-                if successCount+failCount == numOfPartitionsBeingMoved:
+                if successCount+failCount == numOfPartitionsBeingMoved and replicaSuccessCount+replicaFailCount == numOfPartitionsBeingMoved:
                     if successCount == numOfPartitionsBeingMoved:
                         print(f'{numOfPartitionsBeingMoved} partitions moved to {maxPosDrive.path+"/data"} successfully')
                         break
